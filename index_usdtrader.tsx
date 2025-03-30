@@ -1,0 +1,210 @@
+
+// USDTRADER - Plataforma de Ordens com Execução Baseada em Candle BTCUSDT
+// Código completo da página index.tsx conforme solicitado
+
+import { useEffect, useRef, useState } from "react";
+
+export default function Home() {
+  const [balance, setBalance] = useState(0);
+  const [demoBalance, setDemoBalance] = useState(10000);
+  const [accountType, setAccountType] = useState("real");
+  const [orders, setOrders] = useState([]);
+  const [confirmation, setConfirmation] = useState("");
+  const containerRef = useRef(null);
+
+  const OrderSound = {
+    win: typeof Audio !== "undefined" ? new Audio("/sounds/win.mp3") : null,
+    lose: typeof Audio !== "undefined" ? new Audio("/sounds/lose.mp3") : null,
+    draw: typeof Audio !== "undefined" ? new Audio("/sounds/draw.mp3") : null,
+  };
+
+  const getPriceCandle = async () => {
+    try {
+      const res = await fetch("https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=1m&limit=2");
+      const data = await res.json();
+      return data[1];
+    } catch (err) {
+      console.error("Erro ao obter candle:", err);
+      return null;
+    }
+  };
+
+  const executeOrder = async (direction) => {
+    const now = new Date();
+    const seconds = now.getSeconds();
+    if (seconds > 50) {
+      setConfirmation("Ordem inválida: só é permitida até o segundo 50 do minuto.");
+      setTimeout(() => setConfirmation(""), 3000);
+      return;
+    }
+
+    const entryTime = new Date(now.getTime() + 60000);
+    const openTime = new Date(entryTime.setSeconds(0, 0));
+    const label = accountType === "real" ? "real" : "demo";
+    const id = `${openTime.getTime()}-${direction}-${Math.random()}`;
+
+    setOrders((prev) => [
+      ...prev,
+      {
+        id,
+        direction,
+        status: "pendente",
+        entryMinute: openTime,
+        result: null,
+        remaining: 60,
+        label,
+      },
+    ]);
+
+    setConfirmation("Ordem registrada para o próximo minuto.");
+    setTimeout(() => setConfirmation(""), 3000);
+  };
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setOrders((prev) =>
+        prev.map((order) => {
+          if (order.status !== "pendente") return order;
+          const secondsLeft = Math.floor((order.entryMinute.getTime() - new Date().getTime()) / 1000);
+          return { ...order, remaining: secondsLeft >= 0 ? secondsLeft : 0 };
+        })
+      );
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    const checkResults = async () => {
+      const now = new Date();
+      for (const order of orders) {
+        if (order.status === "pendente" && now.getTime() >= order.entryMinute.getTime() + 60000) {
+          const candle = await getPriceCandle();
+          if (!candle) continue;
+
+          const open = parseFloat(candle[1]);
+          const close = parseFloat(candle[4]);
+          let result = "empate";
+          if (close > open) result = "Alta";
+          else if (close < open) result = "Baixa";
+
+          const ganhou = order.direction === result;
+
+          setOrders((prev) =>
+            prev.map((o) =>
+              o.id === order.id
+                ? { ...o, status: "finalizado", result: result === "empate" ? "Empate" : ganhou ? "Vitória" : "Derrota" }
+                : o
+            )
+          );
+
+          if (order.label === "real") {
+            setBalance((prev) =>
+              result === "empate" ? prev : result === order.direction ? prev + 100 : prev - 100
+            );
+          } else {
+            setDemoBalance((prev) =>
+              result === "empate" ? prev : result === order.direction ? prev + 100 : prev - 100
+            );
+          }
+
+          if (result === "empate") OrderSound.draw?.play();
+          else if (ganhou) OrderSound.win?.play();
+          else OrderSound.lose?.play();
+        }
+      }
+    };
+    const interval = setInterval(checkResults, 2000);
+    return () => clearInterval(interval);
+  }, [orders]);
+
+  useEffect(() => {
+    if (window.TradingView || !containerRef.current) return;
+    const script = document.createElement("script");
+    script.src = "https://s3.tradingview.com/tv.js";
+    script.async = true;
+    script.onload = () => {
+      new window.TradingView.widget({
+        autosize: true,
+        symbol: "BINANCE:BTCUSDT",
+        interval: "1",
+        timezone: "Etc/UTC",
+        theme: "dark",
+        style: "1",
+        locale: "pt",
+        hide_top_toolbar: true,
+        hide_side_toolbar: true,
+        allow_symbol_change: false,
+        container_id: "tradingview_btc"
+      });
+    };
+    containerRef.current.appendChild(script);
+    return () => {
+      if (containerRef.current) containerRef.current.innerHTML = "";
+    };
+  }, []);
+
+  const saldo = accountType === "real" ? balance : demoBalance;
+
+  return (
+    <div className="min-h-screen bg-black text-white p-4">
+      <header className="flex justify-between items-center mb-4">
+        <h1 className="text-2xl font-bold text-neon">USDTRADER</h1>
+        <div onClick={() => setAccountType(accountType === "real" ? "demo" : "real")} className="cursor-pointer text-right">
+          <p className="text-sm">{accountType === "real" ? "Conta Real" : "Conta Demo"}</p>
+          <p className="text-lg font-semibold">{accountType === "real" ? "R$" : "$"} {saldo.toFixed(2)}</p>
+          <p className="text-xs text-gray-400">Clique para trocar</p>
+        </div>
+      </header>
+
+      {confirmation && <p className="mb-4 text-green-400">{confirmation}</p>}
+
+      <div className="mb-6">
+        <div ref={containerRef} className="h-64 rounded-xl overflow-hidden">
+          <div id="tradingview_btc" style={{ height: 260 }} />
+        </div>
+      </div>
+
+      <div className="flex gap-4 mb-6">
+        <button onClick={() => executeOrder("Alta")} className="w-full bg-green-600 hover:bg-green-700 px-4 py-2 rounded text-white">
+          Alta
+        </button>
+        <button onClick={() => executeOrder("Baixa")} className="w-full bg-red-600 hover:bg-red-700 px-4 py-2 rounded text-white">
+          Baixa
+        </button>
+      </div>
+
+      <div className="bg-zinc-900 p-4 rounded-xl">
+        <h2 className="text-lg font-semibold mb-4">Ordens Ativas</h2>
+        {orders.filter(o => o.status === "pendente").length === 0 && (
+          <p className="text-gray-500 text-sm">Nenhuma ordem ativa</p>
+        )}
+        {orders.filter(o => o.status === "pendente").map(order => (
+          <div key={order.id} className="text-sm mb-2">
+            <p>
+              [{order.label.toUpperCase()}] {order.direction} - Executa às {order.entryMinute.toLocaleTimeString()} -
+              <span className="ml-2 text-yellow-400">{order.remaining}s</span>
+            </p>
+          </div>
+        ))}
+
+        <hr className="my-4 border-zinc-700" />
+
+        <h2 className="text-lg font-semibold mb-2">Histórico</h2>
+        {orders.filter(o => o.status === "finalizado").length === 0 && (
+          <p className="text-gray-500 text-sm">Nenhum histórico ainda</p>
+        )}
+        {orders.filter(o => o.status === "finalizado").slice(0, 10).map(o => (
+          <p key={o.id} className="text-sm">
+            [{o.label.toUpperCase()}] {o.direction} às {o.entryMinute.toLocaleTimeString()} — {o.result}
+          </p>
+        ))}
+      </div>
+
+      <style jsx>{`
+        .text-neon {
+          color: #00f0ff;
+        }
+      `}</style>
+    </div>
+  );
+}
